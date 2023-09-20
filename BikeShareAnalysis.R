@@ -75,3 +75,45 @@ bike_predictions_pois$datetime <- bike_test$datetime
 bike_predictions_pois$datetime <-format(bike_predictions_pois$datetime)
 
 vroom_write(bike_predictions_pois, "bike_predictions_pois.csv", delim=",")
+
+
+
+#Penalized Regression 
+
+
+my_recipe_2 <- recipe(count ~ ., data=bike) %>%
+  step_num2factor(season, levels=c("spring", "summer", "fall", "winter")) %>% #modifying season column from numbers to a factor
+  step_num2factor(weather, levels=c("clear", "mist", "rain/snow")) %>% #modifying weather from numbers into factors
+  step_bin2factor(holiday) %>% #modifying holiday to factor from numbers
+  step_bin2factor(workingday) %>% #modifying working day to factor from numbers 
+  step_rm(datetime) %>%
+  step_dummy(all_nominal_predictors()) %>% #make dummy variables
+  step_normalize(all_numeric_predictors()) # Make mean 0, sd=18
+
+
+logTrainSet <- bike %>%
+  mutate(count=log(count))
+## Define the model
+lin_model <- linear_reg() %>%
+  set_engine("lm")
+
+
+## Penalized regression model10
+preg_model <- linear_reg(penalty=0.01, mixture=0.01) %>% #Set model and tuning11
+  set_engine("glmnet") # Function to fit in R12
+preg_wf <- workflow() %>%
+  add_recipe(my_recipe_2) %>%
+  add_model(preg_model) %>%
+  fit(data=logTrainSet)
+preg_predictions <- predict(preg_wf, new_data=bike_test) %>% #This predicts log(count)
+  mutate(.pred=exp(.pred)) %>% # Back-transform the log to original scale
+  bind_cols(., bike_test) %>% #Bind predictions with test data
+  select(datetime, .pred) %>% #Just keep datetime and predictions
+  rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
+  mutate(count=pmax(0, count)) %>% #pointwise max of (0, prediction)
+  mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
+
+
+## Write predictions to CSV
+vroom_write(x=preg_predictions, file="./LogLinearPreds.csv", delim=",")
+
