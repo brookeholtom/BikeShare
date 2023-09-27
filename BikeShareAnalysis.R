@@ -126,6 +126,16 @@ vroom_write(x=preg_predictions, file="./LogLinearPreds.csv", delim=",")
 logTrainSet <- bike %>%
   mutate(count=log(count))
 
+my_recipe_tree <- recipe(count ~ ., data=bike) %>%
+  step_num2factor(season, levels=c("spring", "summer", "fall", "winter")) %>% #modifying season column from numbers to a factor
+  step_num2factor(weather, levels=c("clear", "mist", "rain/snow")) %>% #modifying weather from numbers into factors
+  step_bin2factor(holiday) %>% #modifying holiday to factor from numbers
+  step_bin2factor(workingday) %>% #modifying working day to factor from numbers 
+  step_rm(datetime) %>%
+  step_dummy(all_nominal_predictors()) %>% #make dummy variables
+  step_normalize(all_numeric_predictors()) # Make mean 0, sd=18
+
+
 preg_model_2 <- linear_reg(penalty=tune(),
                          mixture=tune()) %>% 
                          set_engine("glmnet") 
@@ -173,5 +183,84 @@ predict(new_data = bike_test) %>%
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
 vroom_write(x=predictions_5, file="./LogLinearPreds_Penalized.csv", delim=",")
+
+
+
+
+#####################
+###Regression Tree###
+#####################
+
+logTrainSet_tree <- bike %>%
+  mutate(count=log(count))
+
+library(rpart)
+library(tidymodels)
+
+my_mod_tree <- decision_tree(tree_depth = tune(),
+                        cost_complexity = tune(),
+                        min_n=tune()) %>% #Type of model
+  set_engine("rpart") %>% # Engine = What R function to use
+  set_mode("regression")
+
+my_recipe_tree <- recipe(count ~ ., data=logTrainSet_tree) %>%
+  step_num2factor(season, levels=c("spring", "summer", "fall", "winter")) %>% #modifying season column from numbers to a factor
+  step_num2factor(weather, levels=c("clear", "mist", "rain/snow")) %>% #modifying weather from numbers into factors
+  step_bin2factor(holiday) %>% #modifying holiday to factor from numbers
+  step_bin2factor(workingday) %>% #modifying working day to factor from numbers 
+  step_rm(datetime) %>%
+  step_dummy(all_nominal_predictors()) %>% #make dummy variables
+  step_normalize(all_numeric_predictors()) # Make mean 0, sd=18
+
+
+## Create a workflow with model & recipe
+
+
+preg_wf_tree <- workflow() %>%
+  add_recipe(my_recipe_tree) %>%
+  add_model(my_mod_tree)
+
+## Set up grid of tuning values
+tuning_grid_tree <- grid_regular(tree_depth(),
+                            cost_complexity(),
+                            min_n(),
+                            levels = 5) 
+
+## Set up K-fold CV
+  folds <- vfold_cv(logTrainSet_tree, v =5, repeats=1)
+
+## Find best tuning parameters
+CV_results_tree <- preg_wf_tree %>%
+  tune_grid(resamples=folds,
+            grid=tuning_grid_tree,
+            metrics=metric_set(rmse, mae, rsq))
+
+collect_metrics(CV_results_tree) %>%
+  filter(.metric=="rmse") %>%
+  ggplot(data=., aes(x=penalty, y=mean, color=factor(mixture))) +
+  geom_line()
+
+
+bestTune <- CV_results %>%
+  select_best("rmse")
+
+## Finalize workflow and predict
+
+final_wf_tree <- preg_wf_tree %>%
+  finalize_workflow(bestTune) %>%
+  fit(data=logTrainSet)
+
+predictions_tree <- final_wf_tree %>%
+  predict(new_data = bike_test) %>%
+  mutate(.pred=exp(.pred)) %>% # Back-transform the log to original scale
+  bind_cols(., bike_test) %>% #Bind predictions with test data
+  select(datetime, .pred) %>% #Just keep datetime and predictions
+  rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
+  mutate(count=pmax(0, count)) %>% #pointwise max of (0, prediction)
+  mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
+
+vroom_write(x=predictions_tree, file="./LogLinearPreds_Tree.csv", delim=",")
+
+
 
 
