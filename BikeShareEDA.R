@@ -8,7 +8,7 @@ dplyr::glimpse(bike)
 DataExplorer::plot_intro(bike)
 DataExplorer::plot_correlation(bike) 
 DataExplorer::plot_bar(bike) 
-DataExplorer::plot_histrograms(bike) 
+DataExplorer::plot_histograms(bike) 
 DataExplorer::plot_missing(bike)
 GGally::ggpairs(bike)
 

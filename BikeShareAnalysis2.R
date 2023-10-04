@@ -73,8 +73,8 @@ logTrainSet <- bike %>%
 lin_model <- linear_reg() %>%
   set_engine("lm")
 
-preg_model <- linear_reg(penalty=0.01, mixture=0.01) %>%
-  set_engine("glmnet") 
+preg_model <- linear_reg(penalty=0.01, mixture=0.01) %>% #Set model and tuning11
+  set_engine("glmnet") # Function to fit in R12
 
 preg_wf <- workflow() %>%
   add_recipe(my_recipe_2) %>%
@@ -296,8 +296,7 @@ random_forest_stacked <- random_forest_wf_stacked %>%
 
 my_stack <- stacks() %>%
   add_candidates(preg_models_stacked) %>%
-  add_candidates(lin_reg_model_stacked) %>%
-  add_candidates(random_forest_stacked)
+  add_candidates(lin_reg_model_stacked)
 
 
 stackData <- as_tibble(my_stack)
@@ -316,7 +315,6 @@ stack_predictions <- predict(fitted_bike_stack, new_data = bike_test) %>%
   mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
 vroom_write(x=stack_predictions, file="./LogLinearPreds_Stacked.csv", delim=",")
-
 
 
 
