@@ -5,6 +5,7 @@ library(vroom)
 library(poissonreg)
 library(rpart)
 library(ranger)
+library(stacks)
 
 
 #Importing Data In
@@ -31,7 +32,7 @@ my_recipe <- recipe(count ~ ., data=bike) %>%
 
 prepped_recipe <- prep(my_recipe) 
 bake(prepped_recipe, new_data=bike)
-baked_recipe <- bake(my_recipe, new_data = bike_test)
+#baked_recipe <- bake(my_recipe, new_data = bike_test)
 
 #Linear Model
 my_mod <- linear_reg() %>% 
@@ -60,6 +61,7 @@ my_recipe_2 <- recipe(count~., data = bike) %>%
   step_mutate(weather=ifelse(weather==4, 3, weather)) %>%
   step_num2factor(weather, levels = c("Clear", "Mist", "Rain")) %>%
   step_time(datetime, features = "hour") %>%
+  step_date(datetime, features = "year") %>%
   step_rm(datetime) %>%
   step_dummy(all_nominal_predictors()) %>%
   step_normalize(all_numeric_predictors())
@@ -234,7 +236,7 @@ bake(prepped_recipe_stacked, new_data=bike)
 bake(prepped_recipe_stacked, new_data=bike_test)
 
 
-folds <- vfold_cv(logTrainSet, v=10, repeats=1)
+folds <- vfold_cv(logTrainSet, v=5, repeats=1)
 
 untunedmodel <- control_stack_grid()
 tunedmodel <-  control_stack_resamples()
@@ -263,13 +265,13 @@ preg_wf_stacked <-workflow() %>%
 
 preg_tuning_grid_stacked <- grid_regular(penalty(), 
                                          mixture(),
-                                         levels= 10)
+                                         levels= 5)
 
 
 preg_models_stacked <- preg_wf_stacked %>%
   tune_grid(resamples=folds, 
             grid=preg_tuning_grid_stacked,
-            metrics=metric_set(rmse, mae, rsq),
+            metrics=metric_set(rmse),
             control=untunedmodel)
 
 
@@ -317,6 +319,97 @@ stack_predictions <- predict(fitted_bike_stack, new_data = bike_test) %>%
 
 vroom_write(x=stack_predictions, file="./LogLinearPreds_Stacked.csv", delim=",")
 
+
+
+##Final Model##
+
+prepped_recipe_stacked <- prep(my_recipe_2) 
+bake(prepped_recipe_stacked, new_data=bike)
+bake(prepped_recipe_stacked, new_data=bike_test)
+
+
+folds <- vfold_cv(logTrainSet, v=20, repeats=1)
+
+untunedmodel <- control_stack_grid()
+tunedmodel <-  control_stack_resamples()
+
+
+lin_model_stacked <- linear_reg() %>%
+  set_engine("lm")
+
+linregwf_stacked <-  workflow () %>%
+  add_recipe(my_recipe) %>%
+  add_model(lin_model_stacked) 
+
+lin_reg_model_stacked <- fit_resamples(linregwf_stacked, 
+                                       resamples = folds, 
+                                       metrics = metric_set(rmse, mae, rsq), 
+                                       control=tunedmodel)
+
+preg_model_stacked <- linear_reg(penalty=tune(),
+                                 mixture=tune()) %>% 
+  set_engine("glmnet") 
+
+
+preg_wf_stacked <-workflow() %>%
+  add_recipe(my_recipe_2) %>%
+  add_model(preg_model_stacked) 
+
+preg_tuning_grid_stacked <- grid_regular(penalty(), 
+                                         mixture(),
+                                         levels= 20)
+
+
+preg_models_stacked <- preg_wf_stacked %>%
+  tune_grid(resamples=folds, 
+            grid=preg_tuning_grid_stacked,
+            metrics=metric_set(rmse),
+            control=untunedmodel)
+
+
+random_forest_stacked <- rand_forest(mtry = tune(),
+                                     min_n = tune(),
+                                     trees = 1000) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+random_forest_wf_stacked <- workflow() %>%
+  add_recipe(my_recipe_2) %>%
+  add_model(random_forest_stacked)
+
+tuning_grid_random_forest <- grid_regular(mtry(range = c(1, 10)),
+                                          min_n(),
+                                          levels = (10))
+
+random_forest_stacked <- random_forest_wf_stacked %>%
+  tune_grid(resamples = folds,
+            grid = tuning_grid_random_forest,
+            metrics = metric_set(rmse),
+            control=untunedmodel)
+
+
+my_stack <- stacks() %>%
+  add_candidates(preg_models_stacked) %>%
+  add_candidates(lin_reg_model_stacked) %>%
+  add_candidates(random_forest_stacked)
+
+
+stackData <- as_tibble(my_stack)
+
+
+fitted_bike_stack <-  my_stack %>%
+  blend_predictions() %>%
+  fit_members()
+
+stack_predictions <- predict(fitted_bike_stack, new_data = bike_test) %>%
+  mutate(.pred=exp(.pred)) %>% # Back-transform the log to original scale
+  bind_cols(., bike_test) %>% #Bind predictions with test data
+  select(datetime, .pred) %>% #Just keep datetime and predictions
+  rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
+  mutate(count=pmax(0, count)) %>% #pointwise max of (0, prediction)
+  mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
+
+vroom_write(x=stack_predictions, file="./LogLinearPreds_Stacked.csv", delim=",")
 
 
 
